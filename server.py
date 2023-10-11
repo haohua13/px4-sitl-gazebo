@@ -13,6 +13,7 @@ def send_message(W, q):
     message = struct.pack('%sd' % len(list), *list)
     # Send the message to MATLAB
     sender_socket.sendto(message, (matlab_ip, matlab_port))
+    print("sent message:", message)
     # Close the socket
     sender_socket.close()
 
@@ -26,9 +27,9 @@ def receive_message():
     sock.bind((udp_ip, udp_port))
     msgcount = 0
     data, addr = sock.recvfrom(512)
-    print("len", str(len(data)))
+    # print("len", str(len(data)))
     output = struct.unpack('dddddd', data)
     msgcount += 1
     print("received message:", output)
-    print("message count:", str(msgcount))
+    # print("message count:", str(msgcount))
     return output

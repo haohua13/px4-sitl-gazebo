@@ -47,6 +47,9 @@ class Video():
         self._frame = None
         self.prev_frame = None
 
+        self.prev_time = 0
+        self.time = 0
+
         # [Software component diagram](https://www.ardusub.com/software/components.html)
         # UDP video stream (:5600)
         self.video_source = 'udpsrc port={}'.format(self.port)
@@ -65,7 +68,7 @@ class Video():
 
         self.run()
 
-    def start_gst(self, config=None):
+    def start_gst(self, config=None, useCuda=True):
         """ Start gstreamer pipeline and sink
         Pipeline description list e.g:
             [
@@ -85,7 +88,7 @@ class Video():
                     '! videoconvert ! video/x-raw,format=(string)BGR ! videoconvert',
                     '! appsink'
                 ]
-
+            
         command = ' '.join(config)
         self.video_pipe = Gst.parse_launch(command)
         self.video_pipe.set_state(Gst.State.PLAYING)
@@ -119,6 +122,9 @@ class Video():
             iterable: bool and image frame, cap.read() output
         """
         return self._frame
+    
+    def get_time(self):
+        return self.prev_time 
 
     def frame_available(self):
         """Check if frame is available
@@ -146,26 +152,11 @@ class Video():
         sample = sink.emit('pull-sample')
         new_frame = self.gst_to_opencv(sample)
         self._frame = new_frame
-
+        current_time = time.time()
+        if self.prev_time != 0:
+            self.time = current_time-self.prev_time
+        self.prev_time = current_time
         return Gst.FlowReturn.OK
-
-
-def plot_optical_flow(flow, img, p0):
-    # just to save figures for report
-    # Extract x and y components of the flow vectors
-    print(flow.shape)
-    flow_x = flow[:, 0]
-    flow_y = flow[:, 1]
-    # Plot the image
-    # Plot the flow vectors using quiver plot
-    step = 1
-    plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-    plt.title('Optical Flow Vector')
-    plt.quiver(p0[:, 0], p0[:, 1], flow_x, flow_y, color='green', angles='xy', scale_units='xy', scale=1)
-    # Show the plot
-    plt.show()
-    time.sleep(0.1)
-    plt.close()
 
 if __name__ == '__main__':
     # Create the video object
@@ -175,12 +166,11 @@ if __name__ == '__main__':
      # Previous image frame
     prev_frame = None
 
-    lk_params = dict( winSize  = (15, 15),
+    lk_params = dict( winSize  = (20, 20),
                   maxLevel = 2,
                   criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
-
-    prev_pi = algorithm.generate_inside_points(2000)
-
+    
+    prev_pi = algorithm.generate_inside_points(3000)
     count = 0
     # sample time between frames
     interval = 2
@@ -189,6 +179,7 @@ if __name__ == '__main__':
     prev_q = 0
     iteration = 0
     flag_inertial_data = False
+    process_time = False
 
     while True:
         # receive UDP messages to obtain inertial data (orientation and angular velocity)
@@ -196,10 +187,11 @@ if __name__ == '__main__':
         if(output != None):
             euler = np.array(output[0:3])
             angular_velocity = np.array(output[3:6])
-            print(output)
             # convert to rotation matrix
             R = R.from_euler('XYZ', euler, degrees = True)
             rotation_matrix = np.array(R.as_matrix())
+            print('Rotation: ', rotation_matrix)
+            print('Angular Velocity:', angular_velocity)
             flag_inertial_data = True
 
         # Wait for the next frame
@@ -207,14 +199,9 @@ if __name__ == '__main__':
             continue
 
         frame = video.frame() # obtain image frame
+        
+
         if prev_frame is not None:
-
-            # only process image in every interval frames
-            count = count + 1 # i.e. at 30 fps, this advances count/30 seconds per iteration
-            if count != interval:
-                continue
-            count = 0
-
             start = time.time()
             # Convert frames to grayscale for optical flow
             gray_prev = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
@@ -238,7 +225,7 @@ if __name__ == '__main__':
             print('Chosen Image Points: ', filtered_pi.shape)
 
             # convert to homogeneous coordinates
-            size =filtered_prev_pi.shape[0 ]
+            size =filtered_prev_pi.shape[0]
             z_axis = np.ones((size, 1))
             filtered_prev= np.concatenate((filtered_prev_pi, z_axis), axis=1)
             filtered_current = np.concatenate((filtered_pi, z_axis), axis=1)
@@ -248,24 +235,17 @@ if __name__ == '__main__':
             filtered_OF = (filtered_perspective_current - filtered_perspective_prev)/(sample_time)
             filtered_spherical_OF = algorithm.calculate_spherical_OF(filtered_OF, filtered_perspective_prev)
 
-            # calculates the translational optical flow for visual velocity measurement information
-            # rotation_matrix = np.eye(3)
-            # angular_velocity = np.array([0, 0, 0])
-
             W, phi_w = algorithm.translational_optical_flow(filtered_perspective_prev, filtered_spherical_OF, rotation_matrix, angular_velocity, rotation_matrix*np.array([0, 0, 1]), frame)
             if W.all() == 0 :
                 W = prev_W
 
             # calculates the centroid vector for visual position measurement information
             q, P = algorithm.detect_corners(frame)
-            if q.all() == 0:
-                q = prev_q
 
-            W_save = np.append(W_save, W)
-            q_save = np.append(q_save, q)
+            # W_save = np.append(W_save, W)
+            # q_save = np.append(q_save, q)
             prev_W = W
             prev_q = q
-
             # send udp message to matlab (works!)
             server.send_message(W, q)
 
@@ -279,38 +259,40 @@ if __name__ == '__main__':
                 frame = cv2.circle(frame, (int(a), int(b)), 2, (255, 0, 255), -1) # draws image points
 
             img = cv2.add(frame, mask)
-
-            cv2.putText(img, "Image points", (550, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
-            cv2.putText(img, "Optical flow", (550, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
-            cv2.circle(img, (int(P[0]), int(P[1])), 2, (255, 255, 0), 2)
-            cv2.putText(img, "Center Of Target", (550, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1, cv2.LINE_AA)
-            cv2.putText(img, "Area of Integration", (550, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+            # cv2.putText(img, "Image points", (550, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+            # cv2.putText(img, "Optical flow", (550, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
+            # cv2.circle(img, (int(P[0]), int(P[1])), 2, (255, 255, 0), 2)
+            # cv2.putText(img, "Center Of Target", (550, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1, cv2.LINE_AA)
+            # cv2.putText(img, "Area of Integration", (550, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
             cv2.imshow('Optical Flow', img)
-
             # cv2.imwrite('optical_flow.png', img)
-            print(prev_pi.shape)
-            end = time.time()
+            # print(prev_pi.shape)
+            
             print('Time: ', end-start)
 
         else:
             cv2.imshow('Image', frame)
+            # Update the previous frame for the next iteration
+
+            end = time.time()
+        prev_frame = frame.copy()
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-        # Ensure the length of W_save and q_save is a multiple of 3
-        remainder_W = len(W_save) % 3
-        remainder_q = len(q_save) % 3
-        if remainder_W != 0:
-            W_save = np.append(W_save, [0] * (3 - remainder_W))  # Pad with zeros to make length a multiple of 3
+        # # Ensure the length of W_save and q_save is a multiple of 3
+        # remainder_W = len(W_save) % 3
+        # remainder_q = len(q_save) % 3
+        # if remainder_W != 0:
+        #     W_save = np.append(W_save, [0] * (3 - remainder_W))  # Pad with zeros to make length a multiple of 3
 
-        if remainder_q != 0:
-            q_save = np.append(q_save, [0] * (3 - remainder_q))  # Pad with zeros to make length a multiple of 3
+        # if remainder_q != 0:
+        #     q_save = np.append(q_save, [0] * (3 - remainder_q))  # Pad with zeros to make length a multiple of 3
 
-        # Save the reshaped arrays to files
-        W_save_reshaped = W_save.reshape(-1, 3)
-        q_save_reshaped = q_save.reshape(-1, 3)
-        np.save('W_save_reshaped.npy', W_save_reshaped)
-        np.save('q_save_reshaped.npy', q_save_reshaped)
-        scipy.io.savemat('q.mat', mdict={'q': q_save_reshaped})
-        scipy.io.savemat('W.mat', mdict={'W': W_save_reshaped})
+        #     # Save the reshaped arrays to files
+        #     W_save_reshaped = W_save.reshape(-1, 3)
+        #     q_save_reshaped = q_save.reshape(-1, 3)
+        #     np.save('W_save_reshaped.npy', W_save_reshaped)
+        #     np.save('q_save_reshaped.npy', q_save_reshaped)
+        #     scipy.io.savemat('q.mat', mdict={'q': q_save_reshaped})
+        #     scipy.io.savemat('W.mat', mdict={'W': W_save_reshaped})

@@ -18,20 +18,26 @@ def checkedTrace(img0, img1, p0, back_threshold = 1.0):
     d = abs(p0-p0r).reshape(-1, 2).max(-1)
     status = d < back_threshold
     return p1, status
+    
 
+
+
+    pass
 if __name__ == '__main__':
     cap = cv2.VideoCapture('landing-test.mp4')
     # Previous image frame
     ret, prev_frame = cap.read()
-    lk_params = dict( winSize  = (15, 15),
+    lk_params = dict( winSize  = (20, 20),
                   maxLevel = 2,
                   criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+    
 
     # Generate initial points for LK  Method
-    prev_pi = algorithm.generate_inside_points(2000)
+    # prev_pi = algorithm.generate_points()
+    prev_pi = algorithm.generate_inside_points(3000)
     count = 0
     # sample time between frames
-    interval = 2
+    interval = 3
     sample_time = interval/30
     prev_W = 0
     prev_q = 0
@@ -77,6 +83,11 @@ if __name__ == '__main__':
             filtered_perspective_current = algorithm.convert_to_perspective(filtered_current)
             filtered_OF = (filtered_perspective_current - filtered_perspective_prev)/(sample_time)
             filtered_spherical_OF = algorithm.calculate_spherical_OF(filtered_OF, filtered_perspective_prev)
+
+
+            # draw the 3-D spherical optical flow field
+            algorithm.draw_spherical_flow(filtered_perspective_prev, filtered_spherical_OF)
+
 
             # calculates the translational optical flow for visual velocity measurement information
             W, phi_w = algorithm.translational_optical_flow(filtered_perspective_prev, filtered_spherical_OF, np.eye(3), np.array([0, 0, 0]), np.eye(3)*np.array([0, 0, 1]), frame)

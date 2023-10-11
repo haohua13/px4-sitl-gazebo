@@ -61,3 +61,20 @@ plt.ylabel('Y')
 plt.title('Scatter plot of points')
 plt.show()
 
+# Parameters
+image_width = 720
+image_height = 480
+
+h_fov = 1.5708
+f = (image_width)/(2*math.tan(h_fov/2))
+ox = image_width/2
+oy = image_height/2
+
+# Camera intrinsic matrix K
+K = np.array([
+    [-f , 0, ox],
+    [0, -f, oy],
+    [0, 0, 1]
+])
+print(K)
+print(np.linalg.inv(K))

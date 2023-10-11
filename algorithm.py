@@ -1,7 +1,7 @@
 import numpy as np
 import math
 import cv2
-
+from matplotlib import pyplot as plt
 
 # Parameters
 image_width = 720
@@ -21,14 +21,61 @@ K = np.array([
 
 # define section of integration of sphere
 theta_0 = (1*np.pi)/12; # increasing would mean ignoring OF closer to the center
-theta_1 = (3*np.pi)/12; # related to the FOV of the cameras
+theta_1 = (2.8*np.pi)/12; # related to the FOV of the cameras
 phi_0 = 0
 phi_1 = 2*np.pi
+
+
+
+from mpl_toolkits.mplot3d import Axes3D
+
+def draw_spherical_flow(perspective_pi, spherical_OF):
+    # Generate phi and theta meshgrid
+    phi_mesh, theta_mesh = np.meshgrid(np.linspace(phi_0, phi_1, 30), np.linspace(theta_0, theta_1, 30))
+
+    # Generate z values (in this case, using ones for simplicity)
+
+    # Create a 3D figure
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Plot the 3D surface
+    h = ax.plot_surface(phi_mesh, theta_mesh, z, alpha=0.5)
+
+    # Show the plot
+    plt.show()
+
+    
+
+
+
+
+def generate_points():
+    # Generate N points in a structured manner to cover the specified area
+    # Generate evenly spaced phi and theta values
+    phi_values = np.linspace(phi_0, phi_1, 120)
+    theta_values = np.linspace(theta_0, theta_1, 30)
+
+    # Create a meshgrid of phi and theta values
+    phi_mesh, theta_mesh = np.meshgrid(phi_values, theta_values)
+
+    # Calculate corresponding Cartesian coordinates (x, y)
+    x = ((np.sin(theta_mesh) * np.cos(phi_mesh) + 1) * (image_width - 1) / 2).flatten()
+    y = ((np.sin(theta_mesh) * np.sin(phi_mesh) + 1) * (image_height - 1) / 2).flatten()
+
+    # Stack x and y coordinates to get the points
+    points = np.column_stack((x, y))
+
+    points = np.unique(np.round(points), axis = 0)
+    return points
+
+
 
 def generate_inside_points(N):
     # Generate random points inside the defined area of integration
     phi_points = np.random.uniform(phi_0, phi_1, N)
     theta_points = np.random.uniform(theta_0, theta_1, N)
+
     x = ((np.sin(theta_points) * np.cos(phi_points) + 1) * (image_width - 1) / 2)
     y = ((np.sin(theta_points) * np.sin(phi_points) + 1 )* (image_height - 1) / 2)
     points = np.unique(np.round(np.vstack((x, y)).T), axis = 0)
@@ -36,6 +83,7 @@ def generate_inside_points(N):
 
 def convert_to_perspective(p):
     return np.dot(p, np.linalg.inv(K).T)  # Transpose K for proper multiplication
+
 
 # def generate_circular_points(N):
 #     radius = 350
@@ -53,19 +101,6 @@ def convert_to_perspective(p):
 #     points = np.vstack((x, y)).T
 #     # ensure only unique points are returned
 #     unique_points = np.unique(points, axis=0)
-#     return points
-
-# def generate_initial_points(N):
-#     # generate random points for the initial frame to track
-#     # return: 3xN matrix of points
-#     # Calculate the middle of the image
-#     mid_x = image_width // 2
-#     mid_y = image_height // 2
-#     # Generate random points around the middle
-#     points_x = np.random.randint(mid_x - mid_x/2, mid_x + mid_x/2, size=N)
-#     points_y = np.random.randint(mid_y - mid_y/2, mid_y + mid_y/2, size=N)
-#     # Stack the points to form a 2xN matrix
-#     points = np.vstack((points_x, points_y)).T
 #     return points
 
 def draw_area(img, theta_0, theta_1):
@@ -106,10 +141,6 @@ def detect_corners(frame):
     cropped = cv2.bitwise_and(frame, frame, mask=mask)
     cropped = cv2.bitwise_and(cropped, cropped, mask=mask)
 
-
-
-
-
     ## Display
     # cv2.imshow("mask", mask)
     # Convert the cropped image to grayscale
@@ -129,19 +160,23 @@ def detect_corners(frame):
     max_index = np.argmax(areas)
     cnt=contours[max_index]
     x,y,w,h = cv2.boundingRect(cnt)
-    cv2.rectangle(cropped,(x,y),(x+w,y+h),(0,255,0), 2)
+    # cv2.rectangle(cropped,(x,y),(x+w,y+h),(0,255,0), 2)
 
     # center of the rectangle is considered the center of the target
     center = (x+w//2, y+h//2)
     radius = 2
-    cv2.circle(cropped, center, radius, (255, 255, 0), 2)
-    cv2.putText(cropped, "Center Of Target", (500, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1, cv2.LINE_AA)
-    cv2.putText(cropped, "Detected Square Landmark", (500, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-    cv2.imshow("Target Image", cropped)
-    cv2.imwrite('target.png', cropped)
+    # cv2.circle(cropped, center, radius, (255, 255, 0), 2)
+    # cv2.putText(cropped, "Center Of Target", (500, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1, cv2.LINE_AA)
+    # cv2.putText(cropped, "Detected Square Landmark", (500, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+    # cv2.imshow("Target Image", cropped)
+    # cv2.imwrite('target.png', cropped)
 
     P = np.array([x+w//2, y+h//2, 1]) # perspective image point
     q = convert_to_perspective(P) # centroid vector
+    if q == []:
+        q = np.array([0.01, 0.01, 1])
+    else:
+        q = [q[1], q[0], 1]
     print("centroid vector q: ", q)
     print("perspective image point center P: ", P)
     return q, P
@@ -174,12 +209,12 @@ def translational_optical_flow(prev_pi, OF, wRb, omega, normal, img):
     azimuth = np.mod(np.arctan(spherical_prev_pi[:,1]/spherical_prev_pi[:,0]), 2*np.pi) # phi
 
     # draw area of integration on the image
-    draw_area(img, theta_0, theta_1)
+    # draw_area(img, theta_0, theta_1)
 
     area = (phi_1-phi_0)*(np.cos(theta_0)-np.cos(theta_1)) # area of integration
 
-    N_phi =  30 # grid size on the surface of the sphere in phi direction
-    N_theta = 30 # grid size on the surface of the sphere in theta direction
+    N_phi =  20 # grid size on the surface of the sphere in phi direction
+    N_theta = 20 # grid size on the surface of the sphere in theta direction
 
     phi_lin = np.linspace(phi_0, phi_1, N_phi) # phi
     theta_lin = np.linspace(theta_0, theta_1, N_theta) # theta
@@ -200,20 +235,10 @@ def translational_optical_flow(prev_pi, OF, wRb, omega, normal, img):
 
     angle2_indices = np.random.permutation(len(azimuth))
     angle2 = azimuth[angle2_indices]
-    print(max(angle1))
-    print(min(angle1))
-    print(np.average(angle1))
-
-    # Calculate pairwise distances between grid points and image points
-    theta_expand = theta[..., np.newaxis]
-    phi_expand = phi[..., np.newaxis]
-    distance_matrix = np.sqrt((theta_expand - angle1)**2 + (phi_expand - angle2)**2)
-
     # Calculate the integral of the optical flow over the observed area
     # brute-force solution to find closest image point to each grid point
     count = 0
     OF = np.transpose(OF)
-
     for row in range(N_phi):
         for column in range(N_theta):
             min_distance = float('inf')
@@ -246,4 +271,3 @@ def translational_optical_flow(prev_pi, OF, wRb, omega, normal, img):
     print("W: ", W)
 
     return W, phi_w
-

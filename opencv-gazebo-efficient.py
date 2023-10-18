@@ -20,7 +20,6 @@ def checkedTrace(img0, img1, p0, back_threshold = 1.0):
     status = d < back_threshold
     return p1, status
 
-
 class Video():
     """BlueRov video capture class constructor
 
@@ -165,26 +164,27 @@ if __name__ == '__main__':
 
      # Previous image frame
     prev_frame = None
-
+    # current image frame
+    frame = None
+    
     lk_params = dict( winSize  = (10, 10),
                   maxLevel = 2,
                   criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
-    # Generate initial points for LK  Metqhod (points on a grid)
+    
+    # Generate initial points for LK  Method (points on a grid)
     prev_pi = algorithm.generate_points()
     # Generate initial points for LK method (random points)
-    # prev_pi = algorithm.generate_inside_points()
-    count = 0
+    # prev_pi = algorithm.generate_inside_points(1000)
     # sample time between frames
-    interval = 5
+    interval = 2
     sample_time = interval/30
     iteration = 0
-    prev_W = 0
-    prev_q = 0
-    flag_inertial_data = False
-    process_time = False
+    prev_W = np.zeros(3)
+    prev_q = np.zeros(3)
     # initialize inertial data
     angular_velocity = np.array([0, 0, 0])
     rotation_matrix = np.eye(3)
+
     while True:
         # receive UDP messages to obtain inertial data (orientation and angular velocity)
         output =server.receive_message()
@@ -194,23 +194,18 @@ if __name__ == '__main__':
             # convert to rotation matrix
             R = R.from_euler('XYZ', euler, degrees = True)
             rotation_matrix = np.array(R.as_matrix())
-            print('Rotation: ', rotation_matrix)
-            print('Angular Velocity:', angular_velocity)
-            flag_inertial_data = True
+
+            # print('Rotation: ', rotation_matrix)
+            # print('Angular Velocity:', angular_velocity)
 
         # Wait for the next frame. Checks if frame is available, if not continue
         if not video.frame_available():
             continue
-        iteration += 1
-        
-        # Obtain the frame in interval time
-        if iteration == interval:
-            frame = video.frame() # obtain image frame
-        
-        if prev_frame is not None and iteration == interval:
-            iteration = 0
-            
+        frame = video.frame()
+        # cv2.imshow(f'Image {iteration}', frame)
+        if prev_frame is not None and iteration == interval:       
             start = time.time()
+            iteration = 0
             # Convert frames to grayscale for optical flow
             gray_prev = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
             gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -222,7 +217,7 @@ if __name__ == '__main__':
                                                 gray_frame,
                                                 prev_pi_reshaped, None,
                                                 **lk_params)
-            # Check traces between the two frames
+            # Check traces
             p2, trace_status = checkedTrace(gray_prev, gray_frame, prev_pi_reshaped)
             filtered_pi = p2[trace_status].copy()
             filtered_prev_pi = prev_pi[trace_status].copy()
@@ -236,15 +231,13 @@ if __name__ == '__main__':
             z_axis = np.ones((size, 1))
             filtered_prev= np.concatenate((filtered_prev_pi, z_axis), axis=1)
             filtered_current = np.concatenate((filtered_pi, z_axis), axis=1)
-
             # convert to 3-D perspective image points
             filtered_perspective_prev = algorithm.convert_to_perspective(filtered_prev)
             filtered_perspective_current = algorithm.convert_to_perspective(filtered_current)
             filtered_OF = (filtered_perspective_current - filtered_perspective_prev)/(sample_time)
             filtered_spherical_OF = algorithm.calculate_spherical_OF(filtered_OF, filtered_perspective_prev)
-            time_w = time.time()
+
             W, phi_w = algorithm.translational_optical_flow(filtered_perspective_prev, filtered_spherical_OF, rotation_matrix, angular_velocity, rotation_matrix*np.array([0, 0, 1]), frame)
-            print('Time for W: ', time.time() - time_w)
             if W.all() == 0 :
                 W = prev_W
 
@@ -253,12 +246,23 @@ if __name__ == '__main__':
 
             # W_save = np.append(W_save, W)
             # q_save = np.append(q_save, q)
-            prev_W = W
-            prev_q = q
+            q[1] = -q[1]
+            q[2] = -q[2]
+
+            # # ignore peaks of the translational optical flow and use previous value
+            # if (np.linalg.norm(W[2] - prev_W[2])>0.2):
+            #     W = prev_W
+            #     q = prev_q
+            # else:
+            #     prev_W = W
+            #     prev_q = q
+
+            
+
             # send udp message to matlab (works!)
             server.send_message(W, q)
 
-            # draw the tracks
+           # draw the tracks
             for i, (new, old) in enumerate(zip(filtered_pi,
                                             filtered_prev_pi)):
                 a, b = new.ravel()
@@ -268,40 +272,28 @@ if __name__ == '__main__':
                 frame = cv2.circle(frame, (int(a), int(b)), 2, (255, 0, 255), -1) # draws image points
 
             img = cv2.add(frame, mask)
-            # cv2.putText(img, "Image points", (550, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
-            # cv2.putText(img, "Optical flow", (550, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
-            # cv2.circle(img, (int(P[0]), int(P[1])), 2, (255, 255, 0), 2)
-            # cv2.putText(img, "Center Of Target", (550, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1, cv2.LINE_AA)
-            # cv2.putText(img, "Area of Integration", (550, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+            cv2.putText(img, "Image points", (550, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+            cv2.putText(img, "Optical flow", (550, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
+            cv2.circle(img, (int(P[0]), int(P[1])), 2, (255, 255, 0), 2)
+            cv2.putText(img, "Center Of Target", (550, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1, cv2.LINE_AA)
+            cv2.putText(img, "Area of Integration", (550, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
             cv2.imshow('Optical Flow', img)
             # cv2.imwrite('optical_flow.png', img)
             # print(prev_pi.shape)
-            
-            print('Time: ', end-start)
-
-        else:
-            cv2.imshow('Image', frame)
-            # Update the previous frame for the next iteration
 
             end = time.time()
-        prev_frame = frame.copy()
+            
+            print('Time: ', end-start)
+        else:
+            pass
+            # cv2.imshow('Image', frame)
+
+            # Update the previous frame for the next iteration
+
+        # previous frame is at iteration 0 and every interval frames
+        if iteration == 0:
+            prev_frame = frame.copy()
+        iteration += 1
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-
-        # # Ensure the length of W_save and q_save is a multiple of 3
-        # remainder_W = len(W_save) % 3
-        # remainder_q = len(q_save) % 3
-        # if remainder_W != 0:
-        #     W_save = np.append(W_save, [0] * (3 - remainder_W))  # Pad with zeros to make length a multiple of 3
-
-        # if remainder_q != 0:
-        #     q_save = np.append(q_save, [0] * (3 - remainder_q))  # Pad with zeros to make length a multiple of 3
-
-        #     # Save the reshaped arrays to files
-        #     W_save_reshaped = W_save.reshape(-1, 3)
-        #     q_save_reshaped = q_save.reshape(-1, 3)
-        #     np.save('W_save_reshaped.npy', W_save_reshaped)
-        #     np.save('q_save_reshaped.npy', q_save_reshaped)
-        #     scipy.io.savemat('q.mat', mdict={'q': q_save_reshaped})
-        #     scipy.io.savemat('W.mat', mdict={'W': W_save_reshaped})

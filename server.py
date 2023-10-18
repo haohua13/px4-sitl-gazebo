@@ -30,6 +30,6 @@ def receive_message():
     # print("len", str(len(data)))
     output = struct.unpack('dddddd', data)
     msgcount += 1
-    print("received message:", output)
+    # print("received message:", output)
     # print("message count:", str(msgcount))
     return output

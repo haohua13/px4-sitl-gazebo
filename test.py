@@ -78,3 +78,41 @@ K = np.array([
 ])
 print(K)
 print(np.linalg.inv(K))
+
+for k in range(10):
+    for i in range(20):
+        for j in range(50):
+            if j == 4:
+                break
+        print(j)
+        print(i)
+        print(k)
+
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
+# Create a unit sphere mesh
+phi = np.linspace(0, 2 * np.pi, 100)
+theta = np.linspace(0, np.pi, 100)
+phi, theta = np.meshgrid(phi, theta)
+x = np.sin(theta) * np.cos(phi)
+y = np.sin(theta) * np.sin(phi)
+z = np.cos(theta)
+
+# Plot the unit sphere
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.plot_surface(x, y, z, color='b', alpha=0.5)
+u = 1.0  # Replace with your actual values
+v = 2.0
+vector_magnitude = np.sqrt(u**2 + v**2)
+normalized_vector = np.array([u / vector_magnitude, v / vector_magnitude, 0])
+# Plot the normalized vector
+ax.quiver(0, 0, 1, normalized_vector[0], normalized_vector[1], normalized_vector[2], color='r', label='Vector Projection')
+
+ax.set_xlabel('X Label')
+ax.set_ylabel('Y Label')
+ax.set_zlabel('Z Label')
+plt.legend()
+
+plt.show()

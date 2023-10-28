@@ -11,36 +11,43 @@ image_width = 720
 image_height = 480
 
 h_fov = 1.5708
+aspect_ratio = image_width/image_height
 f = (image_width)/(2*math.tan(h_fov/2))
 fy = (image_height)/(2*math.tan(f/2))
 fx = (image_width)/(2*math.tan(f/2))
 print(fx, fy)
+v_fov = 2*math.atan(math.tan(h_fov/2)/aspect_ratio)
+
 ox = image_width/2
 oy = image_height/2
-
-# Camera intrinsic matrix K
-K = np.array([
-    [-fx , 0, ox],
-    [0, -fy, oy],
+sx = f/fx
+sy = f/fy
+A = np.array([
+    [sx , 0, ox],
+    [0, sy, oy],
     [0, 0, 1]
 ])
 
-# generate initial image points
-theta_low = (3*np.pi)/12
-theta_top = (5.5*np.pi)/12
+K1 = np.array([
+    [fx , 0, ox],
+    [0, f, oy],
+    [0, 0, 1]
+])
+
+# Camera intrinsic matrix K
+K = np.array([
+    [fx , 0, ox],
+    [0, fy, oy],
+    [0, 0, 1]
+])
+
+# generate initial image points for LK-Optical Flow method
+theta_low = (1*np.pi)/12
+theta_top = (5*np.pi)/12
 phi_low = 0
 phi_top = 2*np.pi
 N_phi_generate = 30
-N_theta_generate = 16
-
-
-# for the section of the area of integration
-N_phi =  15 # grid size on the surface of the sphere in phi direction
-N_theta = 4 # grid size on the surface of the sphere in theta direction
-phi_0 = 0 
-phi_1 = 2*np.pi
-theta_0 = 1.5*np.pi/12 # increasing would mean ignoring OF closer to the center which is mostly 2-D
-theta_1 = 2.4*np.pi/12 # related to the FOV of the camera, can't be too high
+N_theta_generate  = 10
 
 N = (N_phi_generate+N_theta_generate)*N_theta_generate*2 # number of random points inside the area of integration
 
@@ -56,10 +63,29 @@ def generate_points():
     # Calculate corresponding Cartesian coordinates (x, y)
     x = ((np.sin(theta_mesh) * np.cos(phi_mesh)+1) * (image_width-1) / 2).flatten()
     y = ((np.sin(theta_mesh) * np.sin(phi_mesh)+1) * (image_height-1) / 2).flatten()
-
     # Stack x and y coordinates to get the points
     points = np.column_stack((x, y))
     return points
+
+def generate_points_inverse():
+    # Generate N points in a structured manner to cover the specified area
+    # Generate evenly spaced phi and theta values
+    phi_values = np.linspace(phi_low, phi_top, N_phi_generate)
+    theta_values = np.linspace(theta_low, theta_top, N_theta_generate)
+
+    # Create a meshgrid of phi and theta values
+    phi_mesh, theta_mesh = np.meshgrid(phi_values, theta_values)
+    
+    x = (np.sin(theta_mesh) * np.cos(phi_mesh)+1).flatten()
+    y = (np.sin(theta_mesh) * np.sin(phi_mesh)+1).flatten()
+    z = np.zeros(x.shape)
+    # Stack the 3D coordinates (x, y, z) and add a column of ones for homogeneous coordinates
+    points_3d = np.column_stack((x, y, z))
+    pixels = np.dot(K, points_3d.T).T
+    pixels = np.column_stack((pixels[:, 0], pixels[:, 1]))
+    # visualization.draw_catersian_points(pixels[:, 0], pixels[:, 1])
+    return pixels
+
 
 def generate_inside_points():
     # Generate random points inside the defined area of integration
@@ -73,6 +99,9 @@ def generate_inside_points():
 
 def convert_to_perspective(p):
     return np.dot(p, np.linalg.inv(K).T)  # Transpose K for proper multiplication
+
+def convert_to_perspective1(p):
+    return np.dot(p, np.linalg.inv(K1).T)  # Transpose K for proper multiplication
 
 
 def detect_corners(frame):
@@ -95,14 +124,21 @@ def detect_corners(frame):
     contours, hierarchy = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     # Find the index of the largest contour
     areas = [cv2.contourArea(c) for c in contours]
+    not_found = False
     if areas == []:
-        P = np.array([0, 0, 1])
-        return np.array([0.01, 0.01, 1]), P
+        P = np.array([ox+1, oy+1, 1])
+        q = convert_to_perspective(P)/np.linalg.norm(convert_to_perspective(P))
+        print("centroid vector q NOT FOUND: ", q)
+        print("pixel image point center P NOT FOUND: ", P)
+        not_found = True
+        return q, P, not_found
+    
     mask = cv2.inRange(img_hsv, (0, 0, 0), (180, 255, 255))
     cropped = cv2.bitwise_and(frame, frame, mask=mask)
     max_index = np.argmax(areas)
     cnt=contours[max_index]
     x,y,w,h = cv2.boundingRect(cnt)
+        
     
     # center = (x+w//2, y+h//2)
     # radius = 2
@@ -113,98 +149,107 @@ def detect_corners(frame):
     # cv2.putText(cropped, "Detected Square Landmark", (500, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
     # cv2.imshow("Target Image", cropped)
     # cv2.imwrite('target.png', cropped)
+    
+    P = np.array([x+w//2, y+h//2, 1]) # pixel image point center in homogenous coordinates
 
-    P = np.array([x+w//2, y+h//2, 1]) # perspective image point
-    q = convert_to_perspective(P) # centroid vector
-    if q == []:
-        q = np.array([0.01, 0.01, 1])
+    # convert to perspective
+    p = convert_to_perspective1(P) # centroid vector in perspective projection
+    # convert to spherical centroid vector
+    norm = np.linalg.norm(p)
+    q = p
         
     print("centroid vector q: ", q)
-    print("perspective image point center P: ", P)
-    return q, P
+    print("pixel image point center P: ", P)
+    return q, P, not_found
 
 
 def calculate_spherical_OF(optical_flow_vector, pi_planar):
+    # optical_flow_vector: optical flow under perspective projectiion 2D 3xN
+    # pi_planar: planar image points under perspective projection 2D 3xN
     size = optical_flow_vector.shape[0]
-    OF_spherical = np.zeros((3, size))
+    OF_spherical = np.zeros((size, 3))
+    # Compute the norms of planar image point
+    norms = np.linalg.norm(pi_planar, axis=1)
+    # Normalize each column by its norm to obtain spherical image point
+    spherical_prev_pi = pi_planar / norms[:, np.newaxis]
     for i in range(size):
         value = 1/np.linalg.norm(pi_planar[i,:])
-        projection = np.eye(3)-pi_planar[i, :]*np.transpose(pi_planar[i, :])
-        OF_spherical[:,i] = value*np.dot(projection, optical_flow_vector[i,:])
-    return OF_spherical
+        projector = np.eye(3)-np.outer(pi_planar[i, :], pi_planar[i, :].T)
+        OF_spherical[i, :] = value*(np.dot(projector, optical_flow_vector[i,:]))
+    return OF_spherical, spherical_prev_pi
 
 
-def translational_optical_flow(prev_pi, OF, wRb, omega, normal, img):
-    # prev_pi: previous perspective image point (p0) 3xN
+def skew(vector):
+    """
+    this function returns a numpy array with the skew symmetric cross product matrix for vector.
+    the skew symmetric cross product matrix is defined such that
+    np.cross(a, b) = np.dot(skew(a), b)
+
+    :param vector: An array like vector to create the skew symmetric cross product matrix for
+    :return: A numpy array of the skew symmetric cross product vector
+    """
+
+    return np.array([[0, -vector[2], vector[1]], 
+                     [vector[2], 0, -vector[0]], 
+                     [-vector[1], vector[0], 0]])
+
+
+def translational_optical_flow(spherical_prev_pi, OF, R, omega, normal, img):
+    # prev_pi: previous spherical image point (p0) 3xN
     # OF: optical flow under spherical projection 3xN
-    # wRb: rotation matrix 3x3
+    # R: rotation matrix 3x3 (body to world)
     # omega: angular velocity 3x1
     # normal: 3x1
 
-    # visualization.draw_perspective_points(prev_pi)
-
-    # 1. spherical projection
-    # Compute the norms of each column
-    norms = np.linalg.norm(prev_pi, axis=1)
-    # Normalize each column by its norm
-    spherical_prev_pi = prev_pi / norms[:, np.newaxis]
+    # visualization.draw_perspective_points(spherical_prev_pi)
     theta_angle = np.arcsin(np.sqrt(spherical_prev_pi[:, 0]**2 + spherical_prev_pi[:, 1]**2)) # theta
     phi_angle = np.arctan2(spherical_prev_pi[:,1], spherical_prev_pi[:,0]) # phi
     phi_angle = np.mod(phi_angle, 2*np.pi) # normalize to 0 to 2pi
 
     # visualization.draw_angles(theta_angle, phi_angle)
-
     print(max(theta_angle))
     print(min(theta_angle))
     print(np.average(theta_angle))
 
+
+    # theta_0 = theta_low
+    # theta_1 = theta_top
+    # phi_0 = phi_low
+    # phi_1 = phi_top
+
+    # N_theta = N_theta_generate
+    # N_phi = N_phi_generate
+
+    theta_0 = min(theta_angle)
+    theta_1 = max(theta_angle)
+    phi_0 = min(phi_angle)
+    phi_1 = max(phi_angle)
+
+    ratio = N_phi_generate/N_theta_generate # ratio of phi to theta
+
+    # to prevent the error of the size of the spherical projection (not all spherical points are projected to the surface since not all OF points are obtained)
+    current_size = spherical_prev_pi.shape[0]
+    N_theta = int(np.sqrt(current_size/ratio))+1
+    N_phi = int(ratio*N_theta)
+
     # draw area of integration on the image for visualization
-    visualization.draw_area(img, theta_0, theta_1, phi_0, phi_1, image_width, image_height)
+    # visualization.draw_area(img, theta_low, theta_top, phi_low, phi_top, image_width, image_height)
 
     area = (phi_1-phi_0)*(np.cos(theta_0)-np.cos(theta_1)) # area of integration
 
-    phi_lin = np.linspace(phi_0, phi_1, N_phi) # phi
-    theta_lin = np.linspace(theta_0, theta_1, N_theta) # theta
-
-    # Create meshgrid
-    theta, phi = np.meshgrid(theta_lin, phi_lin)
-
-    # Calculate step sizes
+    # Calculate step sizes for integration 
     dtheta = (theta_1 - theta_0) / (N_theta - 1)
     dphi = (phi_1 - phi_0) / (N_phi - 1)
 
-    # Initialize arrays
-    # original_grid = np.zeros(theta.shape) # grid of detected image points
     integral = 0.0 # total observed optical flow
-
     # Calculate the integral of the optical flow over the observed area
-    # brute-force solution to find closest image point to each grid point on the surface of the sphere
     count = 0
-    time_test = time.time()
-    OF = np.transpose(OF)
-    for row in range(N_phi):
-        for column in range(N_theta):
-            min_distance = 0.15 # minimum distance tolerance (10 approx degrees)
-            closest_point = -1
-            # check for each image point if it is the closest to the grid point
-            for i in range(prev_pi.shape[0]):
-                current_theta = theta_angle[i]  # theta
-                current_phi = phi_angle[i]  # phi
-                # obtain distance between the current image point and the grid point
-                distance = np.sqrt((current_theta - theta[row, column]) ** 2+(current_phi - phi[row, column]) ** 2)
-                if distance < min_distance:
-                    closest_point = i
-                    min_distance = distance
-            # add the optical flow of the closest image point to the integral
-            if closest_point != -1:
-                # print(theta_angle[closest_point], phi_angle[closest_point], theta[row, column], phi[row, column])
-                integral += OF[closest_point, :] * np.sin(theta[row, column])
-                count = count + 1
-
-    print(count)
-    print("time for brute force: ", time.time() - time_test)
-
+    for i in range(spherical_prev_pi.shape[0]):
+            count = count + 1
+            integral += OF[i, :] * np.sin(theta_angle[i])
+    
     # average observed optical flow over the surface of the sphere
+    print(count)
     phi_w = (integral * dphi * dtheta) / area
     print("phi_w: ", phi_w)
 
@@ -215,10 +260,12 @@ def translational_optical_flow(prev_pi, OF, wRb, omega, normal, img):
     sigma = (np.pi / 32) * np.diag(D)
 
     # Derotation - translational optical flow for visual measurement
-    W = np.dot(np.dot(wRb, np.linalg.inv(sigma)), np.dot(wRb.T, (phi_w + (np.pi / 2) * (np.cos(2 * theta_0) - np.cos(2 * theta_1)) * np.dot(omega, normal))))
+    value2  = phi_w+(np.pi/2)*(np.cos(theta_0)-np.cos(theta_1))*np.dot(skew(omega), normal)
+    W =  -R.T @ np.linalg.inv(sigma) @ R @ value2
     print("W: ", W)
 
-    # in case we want to draw the spherical flow
-    # visualization.draw_spherical_flow(prev_pi, OF, original_grid, N_phi, N_theta, phi_0, phi_1, theta_0, theta_1)
-
     return W, phi_w
+
+
+if __name__ == '__main__':
+    generate_points_inverse()

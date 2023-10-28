@@ -3,12 +3,14 @@
 import cv2
 import numpy as np
 import algorithm
+import algorithm_efficient
+import visualization
 import matplotlib.pyplot as plt
 import time
 from scipy.spatial.transform import Rotation as R
 import scipy
 
-# check if the points are in the image
+# check if the points are in both images
 def checkedTrace(img0, img1, p0, back_threshold = 1.0):
     p1, _st, _err = cv2.calcOpticalFlowPyrLK(img0, img1, p0, None, **lk_params)
     p0r, _st, _err = cv2.calcOpticalFlowPyrLK(img1, img0, p1, None, **lk_params)
@@ -17,20 +19,20 @@ def checkedTrace(img0, img1, p0, back_threshold = 1.0):
     return p1, status
     
 if __name__ == '__main__':
-    cap = cv2.VideoCapture('automatic_landing.mp4')
+    cap = cv2.VideoCapture('test_landing_sensors_2.5_1.5_10.mp4')
     # Previous image frameqq
     ret, prev_frame = cap.read()
-    lk_params = dict( winSize  = (10, 10),
-                  maxLevel = 2,
+    lk_params = dict( winSize  = (30, 30),
+                  maxLevel = 2, 
                   criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
     
-    # Generate initial points for LK  Metqhod (points on a grid)
-    prev_pi = algorithm.generate_points()
-    # Generate initial points for LK method (random points)
-    # qprev_pi = algorithm.generate_inside_points()
+    # Generate initial points for LK  Method (points on a grid)
+    # prev_pi = algorithm_efficient.generate_points()
+    # prev_pi = algorithm_efficient.generate_points_inverse()
+    prev_pi = algorithm_efficient.generate_inside_points()
     count = 0
     # sample time between frames
-    interval = 3
+    interval = 1
     sample_time = interval/30
     q_save = []
     iteration = 0
@@ -43,6 +45,7 @@ if __name__ == '__main__':
         if ret:
             count += interval # i.e. at 30 fps, this advances count/30 seconds per iteration
             cap.set(cv2.CAP_PROP_POS_FRAMES, count)
+            
         if prev_frame is not None and frame is not None:
             start = time.time()
             # Convert frames to grayscale for optical flow
@@ -54,51 +57,47 @@ if __name__ == '__main__':
 
             prev_pi_reshaped = prev_pi.reshape(-1, 1, 2).astype(np.float32)
 
-            pi, st1, err1 = cv2.calcOpticalFlowPyrLK(gray_prev,
-                                                gray_frame,
-                                                prev_pi_reshaped, None,
-                                                **lk_params)
-            # Check traces of image pointsq
+            # Check traces of image points between the two frames
             p2, trace_status = checkedTrace(gray_prev, gray_frame, prev_pi_reshaped)
             filtered_pi = p2[trace_status].copy()
             filtered_prev_pi = prev_pi[trace_status].copy()
             filtered_pi = filtered_pi.reshape(-1, 2).astype(np.float32)
-            filtered_pi = np.round(filtered_pi)
             filtered_prev_pi = filtered_prev_pi.reshape(-1, 2).astype(np.float32)
 
+
             print('Chosen Image Points: ', filtered_pi.shape)
-            
             # convert to homogeneous coordinates
             size =filtered_prev_pi.shape[0]
             z_axis = np.ones((size, 1))
             filtered_prev= np.concatenate((filtered_prev_pi, z_axis), axis=1)
             filtered_current = np.concatenate((filtered_pi, z_axis), axis=1)
-            # convert to 3-D perspective image points
-            filtered_perspective_prev = algorithm.convert_to_perspective(filtered_prev) # q_prev
-            filtered_perspective_current = algorithm.convert_to_perspective(filtered_current) # q_curent
-            filtered_OF = (filtered_perspective_current - filtered_perspective_prev)/sample_time # qdot
-            filtered_spherical_OF = algorithm.calculate_spherical_OF(filtered_OF, filtered_perspective_prev) #pdot
 
+            displacement_vector = (filtered_current - filtered_prev)
+
+            # convert to 2-D planar image pointsq
+            filtered_perspective_prev = algorithm.convert_to_perspective(filtered_prev) # q_prev
+            filtered_perspective_current = algorithm.convert_to_perspective(filtered_current) # q_current
+            filtered_OF = (filtered_perspective_current - filtered_perspective_prev)/sample_time # optical flow under perspective projection bar_p_dot
+
+            # calculate the spherical optical flow and spherical image point
+            filtered_spherical_OF, spherical_prev_pi = algorithm_efficient.calculate_spherical_OF(filtered_OF, filtered_perspective_prev) #p_dot
+            # visualization.plot_3d(spherical_prev_pi, filtered_spherical_OF)
             # calculates the translational optical flow for visual velocity measurement information
             time_w = time.time()
-            W, phi_w = algorithm.translational_optical_flow(filtered_perspective_prev, filtered_spherical_OF, np.eye(3), np.array([0, 0, 0]), np.eye(3)*np.array([0, 0, 1]), frame)
-            print('Time for W: ', time.time() - time_w)
-            
-            # calculates the centroid vector for visual position measurement information
-            q, P = algorithm.detect_corners(frame)
-            q[0] = -q[0]
-            q[1] = -q[1]
-            # # ignore peaks of the translational optical flow and use previous value
-            # if (np.linalg.norm(W[2] - prev_W[2])>0.2):
-            #     W = prev_W
-            #     q = prev_q
-            # else:
-            #     prev_W = W
-            #     prev_q = q
+            W, phi_w = algorithm_efficient.translational_optical_flow(spherical_prev_pi, filtered_spherical_OF, np.eye(3), np.array([0, 0, 0]), np.dot(np.eye(3), np.array([0, 0, 1])), frame)
+            print('Time for W: ', time.time()-time_w)
+            # calculates the spherical centroid vector for visual position measurement information
+            q, P = algorithm_efficient.detect_corners(frame)
+
+            # when W is an outlier, use the previous W
+            if (np.linalg.norm(W) < 0.1 and np.linalg.norm(prev_W)>0.2):
+                W = prev_W
+                print('Optical Flow Outlier Detected!')
 
             # save the translational optical flow and centroid vector
             W_save = np.append(W_save, W)
             q_save = np.append(q_save, q)
+            prev_W = W
 
             # draw the tracks
             for i, (new, old) in enumerate(zip(filtered_pi,

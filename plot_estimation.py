@@ -5,10 +5,6 @@ W_save_reshaped = np.load('W_save_reshaped.npy')
 q_save_reshaped = np.load('q_save_reshaped.npy')
 # Plot the data
 plt.figure(figsize=(10, 5))
-
-index = 100
-
-
 # Plot W_save
 plt.subplot(1, 2, 1)
 plt.plot(W_save_reshaped)
